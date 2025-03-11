@@ -16,11 +16,13 @@ This repository implements George Church's DNA storage algorithm for integration
     - [Test Script](#test-script-test_church_algorithmpy)
 4. [DNA Oligo Structure](#dna-oligo-structure)
 5. [Key Features](#key-features)
-6. [Terminology](#terminology)
-7. [Usage Examples](#usage-examples)
-8. [Advanced Features](#advanced-features)
-9. [Performance Considerations](#performance-considerations)
-10. [Future Enhancements](#future-enhancements)
+6. [Primer Configuration Guide](#primer-configuration-guide)
+7. [Multi-File Management](#multi-file-management)
+8. [Terminology](#terminology)
+9. [Usage Examples](#usage-examples)
+10. [Advanced Features](#advanced-features)
+11. [Performance Considerations](#performance-considerations)
+12. [Future Enhancements](#future-enhancements)
 
 ## Overview
 
@@ -152,8 +154,8 @@ The same block can be stored in multiple pools with different primers, providing
 
 ```python
 # Store Block 1 in both Pool 1 and Pool 2
-molfs_dev.register_primers(1, 1, "PRIMER_FOR_POOL1_BLOCK1", "REV_PRIMER_P1_B1")
-molfs_dev.register_primers(2, 1, "PRIMER_FOR_POOL2_BLOCK1", "REV_PRIMER_P2_B1")
+molfs_dev.register_primers(1, 1, "CTACACGACACTTTTCCGATCT", "AGATCGGAAGAGCGGAACAGCA")
+molfs_dev.register_primers(2, 1, "CTACACGACGCTTAACCGATCT", "AGATCGGAAGAGCGGATCAGCA")
 
 # Define distribution strategy
 def redundant_strategy(block_idx, total_blocks):
@@ -192,6 +194,169 @@ The implementation supports both CSV and FASTQ input formats:
 - **CSV**: For processed data with metadata
 - **FASTQ**: For raw sequencing data
 
+## Primer Configuration Guide
+
+Primers play a crucial role in this implementation as they determine the Pool/Block assignment and enable PCR amplification. This section provides detailed guidance on configuring primers for different scenarios.
+
+### Important Requirements
+
+1. **Primer Length**: All primers must be **exactly 22 bases long**
+2. **Primer Diversity**: Primers should be sufficiently different to avoid cross-hybridization
+3. **Balanced GC Content**: Aim for 40-60% GC content for optimal PCR performance
+
+### Configuring Multiple Blocks in the Same Pool
+
+When a pool contains multiple different blocks, each block should have a unique primer pair:
+
+```python
+# Pool 1 with 3 different blocks
+molfs_dev.register_primers(1, 0, "CTACACGACGCTCTTCCGATCT", "AGATCGGAAGAGCGGTTCAGCA")  # Block 0
+molfs_dev.register_primers(1, 1, "CTACACGACACTTTTCCGATCT", "AGATCGGAAGAGCGGAACAGCA")  # Block 1
+molfs_dev.register_primers(1, 2, "CTACACGACGCTAATCCGATCT", "AGATCGGAAGAGCGGGTCAGCA")  # Block 2
+```
+
+This configuration allows the system to:
+- Distinguish between blocks within the same pool
+- Selectively amplify specific blocks during PCR
+- Correctly classify sequences during decoding
+
+### Configuring the Same Block Across Different Pools
+
+For redundancy, the same block can be stored in multiple pools, each with a different primer pair:
+
+```python
+# Block 1 in both Pool 1 and Pool 2 with different primers
+molfs_dev.register_primers(1, 1, "CTACACGACACTTTTCCGATCT", "AGATCGGAAGAGCGGAACAGCA")  # Pool 1, Block 1
+molfs_dev.register_primers(2, 1, "CTACACGACGCTTAACCGATCT", "AGATCGGAAGAGCGGATCAGCA")  # Pool 2, Block 1
+```
+
+This configuration provides:
+- Redundant storage of the same block
+- Ability to recover if one pool is damaged
+- Distinct identification of which pool a sequence belongs to
+
+### Designing Diverse Primers
+
+When designing primers for many Pool/Block combinations, follow these guidelines:
+
+1. **Maintain Fixed Ends**: Keep the ends consistent for PCR compatibility
+   ```
+   CTACACGAC[variable 6nt]CCGATCT
+   ```
+   This ensures the total primer length is always exactly 22 nucleotides.
+
+2. **Vary the Middle Section**: Create diversity in the central 6-nucleotide portion
+   ```
+   CTACACGACGCTCTTCCGATCT  # Original
+   CTACACGACACTTTTCCGATCT  # Variation 1
+   CTACACGACGCTTAACCGATCT  # Variation 2
+   CTACACGACGCTAATCCGATCT  # Variation 3
+   ```
+
+3. **Ensure Sufficient Hamming Distance**: At least 3-4 base differences between primers
+
+4. **Consider Professional Primer Design Tools**: For production use, consider specialized primer design software that accounts for:
+   - Melting temperature (Tm)
+   - Secondary structure formation
+   - Primer-dimer avoidance
+   - GC content optimization
+
+5. **Example of a Simple Systematic Approach**: 
+   This is just one possible method, not necessarily optimal for all cases:
+   ```python
+   # An example approach to generate a primer for a specific pool and block
+   def generate_primer(pool, block):
+       # Create unique variations based on pool and block IDs
+       var1 = "ACGT"[pool % 4]
+       var2 = "ACGT"[block % 4]
+       var3 = "ACGT"[(pool + block) % 4]
+       
+       # Create a unique 6nt middle section
+       middle = f"G{var1}{var2}{var3}C"  # Results in 6nt
+       
+       # Combine with standard ends (total: 22nt)
+       return f"CTACACGAC{middle}CCGATCT"  # 9 + 6 + 7 = 22nt
+   ```
+
+## Multi-File Management
+
+The current implementation focuses on the storage and retrieval of DNA-encoded data blocks, but it doesn't inherently include a file identification system within the DNA oligos themselves. This section explains how to handle multiple files in the MolFS system.
+
+### Address Scope and Limitations
+
+The 19-bit address in each DNA oligo identifies:
+- The position within a specific block (which oligo it is)
+- It does NOT identify which file the block belongs to
+
+This means that when storing multiple files, additional tracking mechanisms are needed.
+
+### File-to-Block Mapping
+
+For a complete file system, MolFS should implement a file-to-block mapping system:
+
+1. **File Registry**: MolFS should maintain a database/registry that tracks:
+   - Which files are stored in the system
+   - Which blocks belong to each file
+   - Which pools contain each block
+
+2. **Block Assignment**: When encoding a file, MolFS should:
+   - Assign unique block IDs to the file
+   - Register these mappings in its internal database
+   - Use the appropriate primers for each block/pool combination
+
+3. **File Reconstruction**: When retrieving a file, MolFS should:
+   - Look up which blocks constitute the file
+   - Retrieve those blocks from their respective pools
+   - Use the `reconstruct_file` method to combine the blocks
+
+### Example Implementation
+
+```python
+# MolFS file-to-block mapping database (simplified example)
+file_registry = {
+    "document1.pdf": {
+        "blocks": [0, 1],
+        "pools": {0: [1], 1: [1, 2]}  # Block 0 in Pool 1, Block 1 in Pools 1 and 2
+    },
+    "image.jpg": {
+        "blocks": [2, 3],
+        "pools": {2: [2], 3: [2]}  # Blocks 2 and 3 both in Pool 2
+    }
+}
+
+# To retrieve document1.pdf
+file_info = file_registry["document1.pdf"]
+block_files = []
+
+# Collect all block files (using the first available pool for each block)
+for block_id in file_info["blocks"]:
+    pool_id = file_info["pools"][block_id][0]  # Use first available pool
+    block_file = f"pool{pool_id}_block{block_id}.csv"
+    block_files.append(block_file)
+
+# Reconstruct the file
+molfs_dev.reconstruct_file(block_files, "document1.pdf")
+```
+
+### Alternative Approaches
+
+For more advanced implementations, consider:
+
+1. **Metadata Blocks**: Each file could have a special metadata block that:
+   - Lists all blocks belonging to the file
+   - Contains file properties (name, size, creation date, etc.)
+   - Has a higher replication factor for durability
+
+2. **Embedded File ID**: Future versions could modify the DNA structure to include:
+   - File identifier in the address portion
+   - Version information for files that change over time
+   - Content-based addressing for deduplication
+
+This separation of concerns:
+- Keeps the DNA oligo structure simple and efficient
+- Allows MolFS to implement sophisticated file management
+- Enables features like versioning, deduplication, and access control
+
 ## Terminology
 
 To avoid confusion, it's important to understand the terminology used:
@@ -212,8 +377,8 @@ from church_interface import MolFSDev
 molfs_dev = MolFSDev()
 molfs_dev.set_block_size(5 * 1024)  # 5KB blocks
 
-# Register primers
-molfs_dev.register_primers(1, 0, "CTACACGACAAAAAAAAAACCGATCT", "AGATCGGAAGAGCGGTTCAGCAAAAA")
+# Register primers (must be exactly 22 bases)
+molfs_dev.register_primers(1, 0, "CTACACGACGCTCTTCCGATCT", "AGATCGGAAGAGCGGTTCAGCA")
 
 # Set current pool/block
 molfs_dev.Pool = 1
@@ -235,6 +400,12 @@ def my_strategy(block_idx, total_blocks):
         return [1]  # First half of blocks to Pool 1
     else:
         return [2]  # Second half of blocks to Pool 2
+
+# Register primers for all pools and blocks
+molfs_dev.register_primers(1, 0, "CTACACGACGCTCTTCCGATCT", "AGATCGGAAGAGCGGTTCAGCA")
+molfs_dev.register_primers(1, 1, "CTACACGACACTTTTCCGATCT", "AGATCGGAAGAGCGGAACAGCA")
+molfs_dev.register_primers(2, 2, "CTACACGACGCTAATCCGATCT", "AGATCGGAAGAGCGGGTCAGCA")
+molfs_dev.register_primers(2, 3, "CTACACGACGCTTAACCGATCT", "AGATCGGAAGAGCGGATCAGCA")
 
 # Encode file across multiple pools
 block_distribution = molfs_dev.encode_file("input.bin", "output_dir", my_strategy)
@@ -296,6 +467,7 @@ This implementation provides a solid foundation that could be extended with:
 2. **Error Correction Codes**: Reed-Solomon or LDPC codes for error correction
 3. **Compression**: Pre-encoding compression to increase storage density
 4. **Encryption**: Pre-encoding encryption for data security
+5. **Integrated File ID**: Embedding file identifiers in the DNA structure
 
 ## Integration Notes for MolFS
 
@@ -304,7 +476,8 @@ When integrating with MolFS, consider the following:
 1. **Primer Design**: Design primers that are sufficiently different for reliable discrimination
 2. **Block Size**: Choose block sizes based on your storage strategy and file characteristics
 3. **Redundancy Strategy**: Consider criticality of data when deciding on redundancy level
-4. **Addressing**: The 19-bit address allows for up to 524,288 oligos per block
+4. **File Tracking**: Implement a robust file-to-block mapping system
+5. **Addressing**: The 19-bit address allows for up to 524,288 oligos per block
 
 For optimal integration, you might want to:
 
